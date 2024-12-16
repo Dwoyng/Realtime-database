@@ -13,14 +13,14 @@
 #include "addons/RTDBHelper.h"
 
 // Insert your network credentials
-#define WIFI_SSID "FPT Telecom 2.4"
-#define WIFI_PASSWORD "tuanantuanduong"
+#define WIFI_SSID "Thinh"
+#define WIFI_PASSWORD "12345678"
 
 // Insert Firebase project API Key
-#define API_KEY "AIzaSyDOivltQwTEzHwktgCzXlL_vtD3ggM4eL8"
+#define API_KEY "AIzaSyCm-HmgnmGyfeBlXdZy0AZuDN7HMHzmOVY"
 
 // Insert RTDB URL
-#define DATABASE_URL "https://new4-23cd7-default-rtdb.asia-southeast1.firebasedatabase.app/" 
+#define DATABASE_URL "https://esp32-database-7b3e1-default-rtdb.asia-southeast1.firebasedatabase.app/" 
 
 // Define DHT sensor type and pin
 #define DHTPIN 4       // GPIO pin connected to DHT sensor
@@ -33,6 +33,8 @@ FirebaseData fbdo;
 FirebaseAuth auth;
 FirebaseConfig config;
 
+WiFiServer server(80); // Tạo server HTTP trên cổng 80
+
 unsigned long sendDataPrevMillis = 0;
 bool signupOK = false;
 
@@ -40,24 +42,26 @@ void setup() {
   Serial.begin(115200);
   dht.begin();
 
+  // Connect to Wi-Fi
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   Serial.print("Connecting to Wi-Fi");
   while (WiFi.status() != WL_CONNECTED) {
     Serial.print(".");
     delay(300);
   }
-  Serial.println();
+ /* Serial.println();
   Serial.print("Connected with IP: ");
   Serial.println(WiFi.localIP());
-  Serial.println();
+*/
+  // Start HTTP server
+  server.begin();
+  Serial.println("HTTP Server started.");
 
-  // Assign the API key (required)
+  // Assign Firebase credentials
   config.api_key = API_KEY;
-
-  // Assign the RTDB URL (required)
   config.database_url = DATABASE_URL;
 
-  // Sign up
+  // Sign up to Firebase
   if (Firebase.signUp(&config, &auth, "", "")) {
     Serial.println("Firebase Sign-Up OK");
     signupOK = true;
@@ -66,21 +70,61 @@ void setup() {
   }
 
   // Assign the callback function for token status
-  config.token_status_callback = tokenStatusCallback; // See addons/TokenHelper.h
+  config.token_status_callback = tokenStatusCallback;
 
   Firebase.begin(&config, &auth);
   Firebase.reconnectWiFi(true);
+
+  // Upload the device's IP address to Firebase
+  String ipAddress = WiFi.localIP().toString();
+  if (Firebase.RTDB.setString(&fbdo, "device/ip", ipAddress)) {
+    Serial.print("Device IP uploaded successfully: ");
+    Serial.println(ipAddress);
+  } else {
+    Serial.println("Failed to upload Device IP!");
+    Serial.println(fbdo.errorReason());
+  }
 }
 
 void loop() {
-  if (Firebase.ready() && signupOK && (millis() - sendDataPrevMillis > 10000 || sendDataPrevMillis == 0)) {
+  Serial.println();
+  Serial.print("Connected with IP: ");
+  Serial.println(WiFi.localIP());
+  // Handle HTTP requests
+  WiFiClient client = server.available(); // Kiểm tra kết nối mới từ client
+  if (client) {
+    Serial.println("New client connected.");
+    String request = client.readStringUntil('\r'); // Đọc request từ client
+    Serial.println("Request: " + request);
+
+    // Trả về thông tin IP của ESP32
+    if (request.indexOf("GET /info") >= 0) {
+      client.println("HTTP/1.1 200 OK");
+      client.println("Content-Type: application/json");
+      client.println();
+      client.print("{\"ip\":\"");
+      client.print(WiFi.localIP());
+      client.print("\",\"status\":\"active\"}");
+    } else {
+      // Trả về 404 nếu không tìm thấy endpoint
+      client.println("HTTP/1.1 404 Not Found");
+      client.println();
+    }
+
+    delay(10);
+    client.stop(); // Đóng kết nối
+    Serial.println("Client disconnected.");
+  }
+
+  // Firebase upload
+  if (Firebase.ready() && signupOK && (millis() - sendDataPrevMillis > 2000 || sendDataPrevMillis == 0)) {
     sendDataPrevMillis = millis();
 
     // Read temperature and humidity from the DHT sensor
     float temperature = dht.readTemperature();
     float humidity = dht.readHumidity();
 
-    // Check if reading is valid
+    // Check if readings are valid
     if (isnan(temperature) || isnan(humidity)) {
       Serial.println("Failed to read from DHT sensor!");
       return;
